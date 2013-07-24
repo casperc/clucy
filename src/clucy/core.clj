@@ -12,7 +12,8 @@
            (org.apache.lucene.search.highlight Highlighter QueryScorer
                                                SimpleHTMLFormatter)
            (org.apache.lucene.util Version AttributeSource)
-           (org.apache.lucene.store NIOFSDirectory RAMDirectory Directory)))
+           (org.apache.lucene.store NIOFSDirectory RAMDirectory Directory)
+           (org.apache.lucene.search Sort SortField SortField$Type)))
 
 (def ^{:dynamic true} *version* Version/LUCENE_CURRENT)
 (def ^{:dynamic true} *analyzer* (StandardAnalyzer. *version*))
@@ -169,24 +170,42 @@ fragments."
                              ^String separator))))
     (constantly nil)))
 
+(defn create-sort
+  "Utility function for creating a Sort instance for sorting search results.
+   Accepts the following field types: :int, :long, :score, :double, :float, :string, defaults to :string"
+  [field & {:keys [type reverse?]}]
+  (let [field-type (case type 
+                     :int SortField$Type/INT
+                     :long SortField$Type/LONG
+                     :score SortField$Type/SCORE
+                     :double SortField$Type/DOUBLE
+                     :float SortField$Type/FLOAT
+                     :string SortField$Type/STRING
+                     SortField$Type/STRING)] 
+    (Sort. (SortField. field field-type (or reverse? false)))))
+
 (defn search
-  "Search the supplied index with a query string."
+  "Search the supplied index with a query string or instantiated lucene query extending the Query class, e.g. TermQuery or BooleanQuery."
   [index query max-results
-   & {:keys [highlight default-field default-operator page results-per-page]
+   & {:keys [highlight default-field default-operator page results-per-page sort]
       :or {page 0 results-per-page max-results}}]
-  (if (every? false? [default-field *content*])
-    (throw (Exception. "No default search field specified"))
-    (with-open [reader (index-reader index)]
+  (when (not (or (string? query) (instance? Query query))) (throw (Exception. "Unsupported query type.")))
+  (when (every? false? [default-field *content*]) (throw (Exception. "No default search field specified")))
+  (with-open [reader (index-reader index)]
       (let [default-field (or default-field :_content)
             searcher (IndexSearcher. reader)
-            parser (doto (QueryParser. *version*
-                                       (as-str default-field)
-                                       *analyzer*)
-                     (.setDefaultOperator (case (or default-operator :or)
-                                            :and QueryParser/AND_OPERATOR
-                                            :or  QueryParser/OR_OPERATOR)))
-            query (.parse parser query)
-            hits (.search searcher query (int max-results))
+            parse-query? (not (instance? Query query))
+            parser (when parse-query? 
+                     (doto (QueryParser. *version*
+                                         (as-str default-field)
+                                         *analyzer*)
+                       (.setDefaultOperator (case (or default-operator :or)
+                                              :and QueryParser/AND_OPERATOR
+                                              :or  QueryParser/OR_OPERATOR))))
+            query (if parse-query? (.parse parser query) query)
+            hits (if sort 
+                   (.search searcher query (int max-results) sort)
+                   (.search searcher query (int max-results)))
             highlighter (make-highlighter query searcher highlight)
             start (* page results-per-page)
             end (min (+ start results-per-page) (.totalHits hits))]
@@ -199,17 +218,19 @@ fragments."
 
                                      highlighter))
            {:_total-hits (.totalHits hits)
-            :_max-score (.getMaxScore hits)}))))))
+            :_max-score (.getMaxScore hits)})))))
 
 (defn search-and-delete
-  "Search the supplied index with a query string and then delete all
+  "Search the supplied index with a query string or instantiated lucene query and then delete all
 of the results."
   ([index query]
      (if *content*
        (search-and-delete index query :_content)
        (throw (Exception. "No default search field specified"))))
   ([index query default-field]
+    (when (not (or (string? query) (instance? Query query))) (throw (Exception. "Unsupported query type.")))
      (with-open [writer (index-writer index)]
-       (let [parser (QueryParser. *version* (as-str default-field) *analyzer*)
-             query  (.parse parser query)]
+       (let [parse-query? (not (instance? Query query))
+             parser (when parse-query? (QueryParser. *version* (as-str default-field) *analyzer*))
+             query  (if parse-query? (.parse parser query) query)]
          (.deleteDocuments writer query)))))

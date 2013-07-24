@@ -69,4 +69,23 @@
       (is (== 1 (count (search index "m*" 10 :page 1 :results-per-page 3))))
       (is (empty? (intersection
                     (set (search index "m*" 10 :page 0 :results-per-page 3))
-                    (set (search index "m*" 10 :page 1 :results-per-page 3))))))))
+                    (set (search index "m*" 10 :page 1 :results-per-page 3)))))))
+  
+  (testing "sorting by name"
+    (let [index (memory-index)
+          _ (doseq [person people] (add index person))
+          results (search index "m*" 10 :sort (create-sort "name"))]
+      (is (= "Mary" (:name (first results))))
+      (is (= "Miles" (:name (last results))))))
+  
+  (testing "sorting by age"
+    (let [index (memory-index)]
+      (doseq [person people] (add index person))
+      (is (= "Melinda" (:name (first (search index "m*" 10 :sort (create-sort "age" :type :float))))))
+      (is (= "Mary" (:name (last (search index "m*" 10 :sort (create-sort "age" :type :float))))))))
+  
+  (testing "reverse sorting by age"
+    (let [index (memory-index)]
+      (doseq [person people] (add index person))
+      (is (= "Mary" (:name (first (search index "m*" 10 :sort (create-sort "age" :type :float :reverse? true))))))
+      (is (= "Melinda" (:name (last (search index "m*" 10 :sort (create-sort "age" :type :float :reverse? true)))))))))
